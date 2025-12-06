@@ -12,7 +12,7 @@ echo "=== Aktualizacja systemu ==="
 apt update
 
 # Pełna aktualizacja systemu
-apt upgrade -y
+apt full-upgrade -y
 
 # Usunięcie niepotrzebnych pakietów
 apt autoremove -y
