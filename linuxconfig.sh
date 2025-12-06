@@ -6,6 +6,21 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+echo "=== Aktualizacja systemu ==="
+
+# Aktualizacja listy pakietów
+apt update
+
+# Pełna aktualizacja systemu
+apt upgrade -y
+
+# Usunięcie niepotrzebnych pakietów
+apt autoremove -y
+apt autoclean
+
+echo "Aktualizacja systemu zakończona"
+
+echo ""
 echo "=== Włączanie logowania SSH dla użytkownika root ==="
 
 # Backup oryginalnej konfiguracji SSH
@@ -42,5 +57,6 @@ rm get-docker.sh
 
 echo ""
 echo "=== Instalacja zakończona ==="
+echo "System został zaktualizowany"
 echo "Docker został zainstalowany i uruchomiony"
 echo "SSH root login został włączony"
