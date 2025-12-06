@@ -42,6 +42,7 @@ echo ""
 echo "=== Instalacja Dockera ==="
 
 # Instalacja Dockera przez oficjalny skrypt
+apt install curl -y
 curl -fsSL https://get.docker.com -o get-docker.sh
 sh get-docker.sh
 
