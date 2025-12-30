@@ -1,0 +1,428 @@
+#!/bin/bash
+
+# Kompleksowy skrypt konfiguracyjny dla nowej maszyny Linux
+# Autor: SIEEKUU
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' 
+
+# Funkcja do wyświetlania nagłówków
+print_header() {
+    echo -e "\n${GREEN}===================================================${NC}"
+    echo -e "${GREEN}$1${NC}"
+    echo -e "${GREEN}===================================================${NC}\n"
+}
+
+print_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠ $1${NC}"
+}
+
+print_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
+
+# Sprawdzenie uprawnień root
+if [ "$EUID" -ne 0 ]; then
+  print_error "Uruchom skrypt jako root (sudo ./admin-setup.sh)"
+  exit 1
+fi
+
+# Zapisanie hostname
+HOSTNAME=$(hostname)
+
+print_header "START KONFIGURACJI SERWERA: $HOSTNAME"
+
+# ============================================
+# 1. AKTUALIZACJA SYSTEMU
+# ============================================
+print_header "1. Aktualizacja systemu"
+
+apt update
+apt full-upgrade -y
+apt autoremove -y
+apt autoclean
+
+print_success "System zaktualizowany"
+
+# ============================================
+# 2. INSTALACJA PODSTAWOWYCH NARZĘDZI
+# ============================================
+print_header "2. Instalacja podstawowych narzędzi"
+
+apt install -y \
+    curl \
+    wget \
+    git \
+    vim \
+    nano \
+    htop \
+    ncdu \
+    tree \
+    zip \
+    unzip \
+    tar \
+    net-tools \
+    dnsutils \
+    traceroute \
+    nmap \
+    screen \
+    tmux \
+    build-essential \
+    software-properties-common \
+    apt-transport-https \
+    ca-certificates \
+    gnupg \
+    lsb-release
+
+print_success "Podstawowe narzędzia zainstalowane"
+
+# ============================================
+# 3. NARZĘDZIA MONITORINGU
+# ============================================
+print_header "3. Instalacja narzędzi monitoringu"
+
+apt install -y \
+    htop \
+    iotop \
+    nethogs \
+    glances \
+    sysstat \
+    iftop
+
+# Włączenie sysstat
+systemctl enable sysstat
+systemctl start sysstat
+
+print_success "Narzędzia monitoringu zainstalowane"
+
+# ============================================
+# 4. DOCKER I DOCKER COMPOSE
+# ============================================
+print_header "4. Instalacja Docker i Docker Compose"
+
+# Instalacja Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sh get-docker.sh
+rm get-docker.sh
+
+# Uruchomienie Docker
+systemctl start docker
+systemctl enable docker
+
+# Instalacja Docker Compose (najnowsza wersja)
+DOCKER_COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d'"' -f4)
+curl -L "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+
+# Weryfikacja
+docker --version
+docker-compose --version
+
+print_success "Docker i Docker Compose zainstalowane"
+
+# ============================================
+# 5. KONFIGURACJA FIREWALL (UFW)
+# ============================================
+print_header "5. Konfiguracja firewall (UFW)"
+
+apt install -y ufw
+
+# Podstawowe reguły
+ufw default deny incoming
+ufw default allow outgoing
+
+# Zezwolenie na SSH (WAŻNE!)
+ufw allow 22/tcp
+
+# Zezwolenie na podstawowe usługi
+ufw allow 80/tcp   # HTTP
+ufw allow 443/tcp  # HTTPS
+
+# Włączenie firewall
+echo "y" | ufw enable
+
+ufw status verbose
+
+print_success "Firewall skonfigurowany"
+print_warning "Port SSH (22) został otwarty. Rozważ zmianę portu SSH dla większego bezpieczeństwa."
+
+# ============================================
+# 6. ZABEZPIECZENIE SSH
+# ============================================
+print_header "6. Zabezpieczenie SSH"
+
+# Backup oryginalnej konfiguracji
+cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup.$(date +%Y%m%d_%H%M%S)
+
+# Konfiguracja SSH
+cat >> /etc/ssh/sshd_config.d/hardening.conf << EOF
+# Konfiguracja zabezpieczeń SSH
+PermitRootLogin yes
+PasswordAuthentication yes
+PubkeyAuthentication yes
+PermitEmptyPasswords no
+X11Forwarding no
+MaxAuthTries 3
+ClientAliveInterval 300
+ClientAliveCountMax 2
+Protocol 2
+EOF
+
+# Restart SSH
+systemctl restart ssh || systemctl restart sshd
+
+print_success "SSH zabezpieczony"
+print_warning "Root login jest włączony. Rozważ jego wyłączenie po skonfigurowaniu kluczy SSH."
+
+# ============================================
+# 7. INSTALACJA FAIL2BAN
+# ============================================
+print_header "7. Instalacja Fail2Ban"
+
+apt install -y fail2ban
+
+# Konfiguracja Fail2Ban
+cat > /etc/fail2ban/jail.local << EOF
+[DEFAULT]
+bantime = 3600
+findtime = 600
+maxretry = 5
+destemail = root@localhost
+sendername = Fail2Ban
+action = %(action_mwl)s
+
+[sshd]
+enabled = true
+port = ssh
+logpath = %(sshd_log)s
+backend = %(sshd_backend)s
+EOF
+
+# Uruchomienie Fail2Ban
+systemctl enable fail2ban
+systemctl start fail2ban
+
+print_success "Fail2Ban zainstalowany i skonfigurowany"
+
+# ============================================
+# 8. NARZĘDZIA DO BACKUPU
+# ============================================
+print_header "8. Instalacja narzędzi do backupu"
+
+apt install -y rsync rclone
+
+print_success "Narzędzia do backupu zainstalowane (rsync, rclone)"
+
+# ============================================
+# 9. OPTYMALIZACJA SYSTEMU
+# ============================================
+print_header "9. Optymalizacja systemu"
+
+# Ustawienie limitów dla użytkowników
+cat >> /etc/security/limits.conf << EOF
+* soft nofile 65535
+* hard nofile 65535
+* soft nproc 65535
+* hard nproc 65535
+EOF
+
+# Optymalizacja sysctl
+cat >> /etc/sysctl.conf << EOF
+
+# Optymalizacje sieciowe
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+net.ipv4.tcp_congestion_control = bbr
+net.core.default_qdisc = fq
+
+# Zabezpieczenia
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_max_syn_backlog = 2048
+net.ipv4.tcp_synack_retries = 2
+
+# Zwiększenie liczby dozwolonych połączeń
+net.core.somaxconn = 65535
+net.ipv4.ip_local_port_range = 1024 65535
+EOF
+
+# Zastosowanie zmian
+sysctl -p
+
+print_success "System zoptymalizowany"
+
+# ============================================
+# 10. AUTOMATYCZNE AKTUALIZACJE BEZPIECZEŃSTWA
+# ============================================
+print_header "10. Konfiguracja automatycznych aktualizacji bezpieczeństwa"
+
+apt install -y unattended-upgrades apt-listchanges
+
+# Konfiguracja
+cat > /etc/apt/apt.conf.d/50unattended-upgrades << EOF
+Unattended-Upgrade::Allowed-Origins {
+    "\${distro_id}:\${distro_codename}-security";
+};
+Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+Unattended-Upgrade::MinimalSteps "true";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "false";
+EOF
+
+cat > /etc/apt/apt.conf.d/20auto-upgrades << EOF
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::AutocleanInterval "7";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+
+print_success "Automatyczne aktualizacje bezpieczeństwa włączone"
+
+# ============================================
+# 11. KONFIGURACJA LOGROTATE
+# ============================================
+print_header "11. Konfiguracja logrotate"
+
+cat > /etc/logrotate.d/admin-logs << EOF
+/var/log/admin/*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    create 0640 root adm
+    sharedscripts
+}
+EOF
+
+print_success "Logrotate skonfigurowany"
+
+# ============================================
+# 12. TWORZENIE ALIASÓW
+# ============================================
+print_header "12. Tworzenie przydatnych aliasów"
+
+cat >> /root/.bashrc << 'EOF'
+
+# Przydatne aliasy
+alias ll='ls -lah'
+alias update='apt update && apt upgrade -y'
+alias ports='netstat -tulanp'
+alias meminfo='free -m -l -t'
+alias psmem='ps auxf | sort -nr -k 4'
+alias pscpu='ps auxf | sort -nr -k 3'
+alias df='df -H'
+alias du='du -ch'
+alias myip='curl ifconfig.me'
+alias dockerclean='docker system prune -af'
+alias dockerstop='docker stop $(docker ps -aq)'
+alias logsize='du -h /var/log/* | sort -rh | head -20'
+EOF
+
+print_success "Aliasy dodane do .bashrc"
+
+# ============================================
+# 13. TWORZENIE SKRYPTU DIAGNOSTYCZNEGO
+# ============================================
+print_header "13. Tworzenie skryptu diagnostycznego"
+
+cat > /usr/local/bin/system-check << 'EOF'
+#!/bin/bash
+
+echo "=== STATUS SYSTEMU ==="
+echo "Hostname: $(hostname)"
+echo "Uptime: $(uptime -p)"
+echo "Load Average: $(cat /proc/loadavg)"
+echo ""
+
+echo "=== PAMIĘĆ ==="
+free -h
+echo ""
+
+echo "=== DYSK ==="
+df -h | grep -v tmpfs
+echo ""
+
+echo "=== TOP 10 PROCESÓW (CPU) ==="
+ps aux --sort=-%cpu | head -11
+echo ""
+
+echo "=== TOP 10 PROCESÓW (RAM) ==="
+ps aux --sort=-%mem | head -11
+echo ""
+
+echo "=== DOCKER ==="
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "Docker nie jest uruchomiony"
+echo ""
+
+echo "=== FIREWALL ==="
+ufw status numbered
+echo ""
+
+echo "=== FAIL2BAN ==="
+fail2ban-client status 2>/dev/null || echo "Fail2Ban nie jest uruchomiony"
+echo ""
+
+echo "=== OSTATNIE LOGOWANIA ==="
+last -n 10
+EOF
+
+chmod +x /usr/local/bin/system-check
+
+print_success "Skrypt diagnostyczny utworzony (/usr/local/bin/system-check)"
+
+# ============================================
+# 14. PODSUMOWANIE
+# ============================================
+print_header "PODSUMOWANIE INSTALACJI"
+
+echo -e "Server: ${GREEN}$HOSTNAME${NC}"
+echo -e "Data: ${GREEN}$(date)${NC}"
+echo ""
+echo "Zainstalowane komponenty:"
+echo "  ✓ System zaktualizowany"
+echo "  ✓ Podstawowe narzędzia"
+echo "  ✓ Narzędzia monitoringu (htop, iotop, nethogs, glances)"
+echo "  ✓ Docker $(docker --version | cut -d' ' -f3)"
+echo "  ✓ Docker Compose $(docker-compose --version | cut -d' ' -f3)"
+echo "  ✓ UFW Firewall (SSH:22, HTTP:80, HTTPS:443)"
+echo "  ✓ SSH Hardening"
+echo "  ✓ Fail2Ban"
+echo "  ✓ Narzędzia do backupu (rsync, rclone)"
+echo "  ✓ Optymalizacje systemu"
+echo "  ✓ Automatyczne aktualizacje bezpieczeństwa"
+echo ""
+echo -e "${YELLOW}WAŻNE NASTĘPNE KROKI:${NC}"
+echo "  1. Zmień hasło root: passwd"
+echo "  2. Utwórz użytkownika nie-root: adduser nazwausera"
+echo "  3. Dodaj użytkownika do sudo: usermod -aG sudo nazwausera"
+echo "  4. Skonfiguruj klucze SSH dla bezpiecznego logowania"
+echo "  5. Rozważ zmianę portu SSH (edytuj /etc/ssh/sshd_config)"
+echo "  6. Wyłącz root login po skonfigurowaniu kluczy SSH"
+echo "  7. Uruchom system-check aby sprawdzić status: system-check"
+echo ""
+echo -e "${GREEN}Konfiguracja zakończona pomyślnie!${NC}"
+echo ""
+
+# Zapisanie logów
+LOG_FILE="/root/admin-setup-$(date +%Y%m%d_%H%M%S).log"
+echo "Log instalacji zapisany w: $LOG_FILE"
+
+# Reboot reminder
+echo -e "${YELLOW}Zalecany restart systemu: reboot${NC}"
